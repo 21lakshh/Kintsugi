@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import { validateFiles, formatValidationErrors, formatFileSize, getRecommendedDocuments, ALLOWED_EXTENSIONS, MAX_FILE_SIZE } from '../utils/fileValidation.js'
 import { useAppStore } from '../store/useAppStore.js'
+import { processDocumentWithAI } from '../services/aiService.js'
 
 export default function FileUpload({ 
   documentType = null, 
@@ -15,7 +16,13 @@ export default function FileUpload({
   const [uploadedFiles, setUploadedFiles] = useState([])
   
   const fileInputRef = useRef(null)
-  const { userProfile, addUploadedFile } = useAppStore()
+  const { 
+    userProfile, 
+    addUploadedFile, 
+    setTempExtractedData,
+    setLoading,
+    addNotification 
+  } = useAppStore()
 
   const handleDrag = (e) => {
     e.preventDefault()
@@ -71,8 +78,9 @@ export default function FileUpload({
       if (!proceed) return
     }
 
-    // Simulate file processing
+    // Process files with AI
     setUploading(true)
+    setLoading(true)
     
     try {
       const processedFiles = []
@@ -80,29 +88,55 @@ export default function FileUpload({
       for (let i = 0; i < files.length; i++) {
         const file = files[i]
         
-        // Simulate upload progress
-        for (let progress = 0; progress <= 100; progress += 10) {
-          setUploadProgress(Math.round(((i * 100) + progress) / files.length))
-          await new Promise(resolve => setTimeout(resolve, 50))
-        }
-
-        // Process file
+        // Update progress for upload simulation
+        setUploadProgress(Math.round(((i * 100) + 25) / files.length))
+        
+        // Process with AI
+        const aiResult = await processDocumentWithAI(file, documentType, userProfile)
+        
+        console.log('🔄 AI Processing Result:', aiResult);
+        
+        setUploadProgress(Math.round(((i * 100) + 75) / files.length))
+        
         const processedFile = {
           id: `file_${Date.now()}_${i}`,
           name: file.name,
           size: file.size,
           type: file.type,
-          documentType: documentType || 'general',
+          documentType: aiResult.metadata.documentType || documentType || 'general',
           uploadDate: new Date().toISOString(),
-          status: 'uploaded',
-          url: URL.createObjectURL(file), // In real app, this would be server URL
-          validationResult: validation.results[i].validation
+          status: aiResult.success ? 'processed' : 'failed',
+          url: URL.createObjectURL(file),
+          validationResult: validation.results[i].validation,
+          aiResult: aiResult
         }
 
         processedFiles.push(processedFile)
         
         // Add to store
         addUploadedFile(processedFile)
+        
+        // If AI extraction was successful, set temporary data for user confirmation
+        if (aiResult.success && aiResult.extractedData.transactions.length > 0) {
+          console.log('💾 Setting temp extracted data:', aiResult.extractedData);
+          setTempExtractedData(aiResult.extractedData)
+          
+          addNotification({
+            type: 'success',
+            title: 'Document Processed Successfully',
+            message: `Extracted ${aiResult.extractedData.transactions.length} transactions from ${file.name}. Please review and confirm.`,
+            duration: 5000
+          })
+        } else if (!aiResult.success) {
+          addNotification({
+            type: 'error',
+            title: 'Processing Failed',
+            message: `Failed to process ${file.name}: ${aiResult.error || 'Unknown error'}`,
+            duration: 5000
+          })
+        }
+        
+        setUploadProgress(Math.round(((i + 1) * 100) / files.length))
       }
 
       setUploadedFiles(processedFiles)
@@ -118,10 +152,18 @@ export default function FileUpload({
       }
 
     } catch (error) {
-      setValidationErrors([`Upload failed: ${error.message}`])
+      console.error('File processing error:', error)
+      setValidationErrors([`Processing failed: ${error.message}`])
+      addNotification({
+        type: 'error',
+        title: 'Upload Failed',
+        message: error.message,
+        duration: 5000
+      })
     } finally {
       setUploading(false)
       setUploadProgress(0)
+      setLoading(false)
     }
   }
 

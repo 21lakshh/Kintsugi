@@ -19,7 +19,9 @@ export const TransactionCategories = {
   
   // Expense Categories
   BUSINESS_EXPENSE: 'Business Expense',
-  PROFESSIONAL_TAX: 'Professional Tax'
+  PROFESSIONAL_TAX: 'Professional Tax',
+  TAX_PAID: 'Tax Paid (TDS)',
+  OTHER_EXPENSE: 'Other Expense'
 }
 
 // Tax Regimes

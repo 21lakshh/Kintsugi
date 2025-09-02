@@ -14,6 +14,53 @@ export default function ProtectedRoute({ children, requireOnboarding = true }) {
     }
   }, [isLoaded, isSignedIn, userProfile, markAsReturningUser])
 
+  // Development bypass - check for skip onboarding in URL
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search)
+    if (urlParams.get('skipOnboarding') === 'true') {
+      console.log('🚀 Bypassing onboarding...');
+      // Create a minimal profile for testing
+      const { updateUserProfile } = useAppStore.getState()
+      const testProfile = {
+        personalInfo: {
+          firstName: 'Test',
+          lastName: 'User',
+          email: 'test@example.com',
+          annualIncome: 600000,
+          age: 28,
+          maritalStatus: 'single',
+          dependents: 0,
+          city: 'Mumbai',
+          isMetroCity: true
+        },
+        userType: 'salaried',
+        onboardingCompleted: true,
+        createdAt: new Date().toISOString()
+      }
+      console.log('✅ Creating test profile:', testProfile);
+      updateUserProfile(testProfile)
+      
+      // Check if there's any pending Gemini data to restore
+      setTimeout(() => {
+        try {
+          const geminiResponses = JSON.parse(localStorage.getItem('gemini-responses') || '[]');
+          if (geminiResponses.length > 0) {
+            const latestResponse = geminiResponses[geminiResponses.length - 1];
+            const timeDiff = new Date() - new Date(latestResponse.timestamp);
+            // If response is less than 2 minutes old, restore it
+            if (timeDiff < 120000) {
+              console.log('🔄 Restoring recent Gemini data:', latestResponse);
+              const { setTempExtractedData } = useAppStore.getState();
+              setTempExtractedData(latestResponse.processedResult.extractedData);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to restore Gemini data:', error);
+        }
+      }, 1000); // Wait 1 second for profile to be set
+    }
+  }, [isLoaded, isSignedIn])
+
   // Show loading while Clerk is loading
   if (!isLoaded) {
     return (

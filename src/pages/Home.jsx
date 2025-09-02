@@ -7,6 +7,8 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { transactionSchema } from '../schemas/validation.js'
 import { TransactionTypes, TransactionCategories } from '../types/index.js'
 import FileUpload from '../components/FileUpload.jsx'
+import ExtractedDataConfirmation from '../components/ExtractedDataConfirmation.jsx'
+import TaxAssistant from '../components/TaxAssistant.jsx'
 
 export default function Home() {
     const { user } = useUser()
@@ -23,12 +25,68 @@ export default function Home() {
         generateAIInsights,
         initializeApp,
         loading,
-        setLoading
+        setLoading,
+        setTempExtractedData
     } = useAppStore()
 
     // Initialize app when component mounts
     useEffect(() => {
         initializeApp()
+        
+        // Add global helper function for debugging
+        window.restoreGeminiData = () => {
+            try {
+                const geminiResponses = JSON.parse(localStorage.getItem('gemini-responses') || '[]');
+                if (geminiResponses.length > 0) {
+                    const latestResponse = geminiResponses[geminiResponses.length - 1];
+                    console.log('🔄 Manually restoring Gemini data:', latestResponse);
+                    setTempExtractedData(latestResponse.processedResult.extractedData);
+                    return latestResponse;
+                } else {
+                    console.log('❌ No Gemini responses found in localStorage');
+                    return null;
+                }
+            } catch (error) {
+                console.error('Failed to restore Gemini data:', error);
+                return null;
+            }
+        };
+        
+        window.viewGeminiData = () => {
+            const data = localStorage.getItem('gemini-responses');
+            console.log('📊 All Gemini responses:', JSON.parse(data || '[]'));
+            return JSON.parse(data || '[]');
+        };
+        
+        window.checkAppState = () => {
+            const state = useAppStore.getState();
+            console.log('🏪 Current App State:', {
+                tempExtractedData: state.tempExtractedData,
+                pendingTransactions: state.pendingTransactions,
+                transactions: state.transactions,
+                userProfile: state.userProfile
+            });
+            return state;
+        };
+        
+        window.toggleDebugData = () => {
+            const state = useAppStore.getState();
+            state.toggleDebugDataContext();
+            const newState = useAppStore.getState();
+            console.log(`🤖 Chatbot Data Source changed to: ${newState.useDebugDataContext ? 'DEBUG (gemini-responses)' : 'LIVE (app state)'}`);
+            return newState.useDebugDataContext;
+        };
+        
+        window.forceShowModal = () => {
+            const geminiResponses = JSON.parse(localStorage.getItem('gemini-responses') || '[]');
+            if (geminiResponses.length > 0) {
+                const latestResponse = geminiResponses[geminiResponses.length - 1];
+                console.log('🔄 Force showing modal with:', latestResponse);
+                setTempExtractedData(latestResponse.processedResult.extractedData);
+                return latestResponse;
+            }
+            return null;
+        };
     }, [initializeApp])
 
     // React Hook Form setup
@@ -424,9 +482,9 @@ export default function Home() {
                 </div>
 
                 {/* Main Content Grid */}
-                <div className="grid lg:grid-cols-3 gap-8">
+                <div className="space-y-8">
                     {/* Transaction Ledger */}
-                    <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100">
+                    <div className="bg-white rounded-xl shadow-sm border border-gray-100">
                         <div className="p-6 border-b border-gray-200">
                             <div className="flex justify-between items-center">
                                 <h2 className="text-xl font-semibold text-gray-900">Recent Transactions</h2>
@@ -474,72 +532,12 @@ export default function Home() {
                     </div>
 
                     {/* AI Assistant Panel */}
-                    <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-                        <div className="p-6 border-b border-gray-200">
-                            <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
-                                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                                Your Tax Assistant
-                            </h2>
-                            <p className="text-sm text-gray-600 mt-1">Powered by AI</p>
-                        </div>
-                        <div className="p-6 space-y-4">
-                            {aiInsights.length === 0 ? (
-                                <div className="text-center py-8">
-                                    <p className="text-gray-500">Add some transactions to get personalized AI insights!</p>
-                                </div>
-                            ) : (
-                                aiInsights.slice(0, 3).map((insight) => (
-                                    <div 
-                                        key={insight.id} 
-                                        className={`p-4 rounded-lg ${
-                                            insight.type === 'info' ? 'bg-blue-50' :
-                                            insight.type === 'warning' ? 'bg-amber-50' :
-                                            insight.type === 'success' ? 'bg-green-50' : 'bg-gray-50'
-                                        }`}
-                                    >
-                                        <div className="flex items-start gap-3">
-                                            <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                                                insight.type === 'info' ? 'bg-blue-100' :
-                                                insight.type === 'warning' ? 'bg-amber-100' :
-                                                insight.type === 'success' ? 'bg-green-100' : 'bg-gray-100'
-                                            }`}>
-                                                {insight.type === 'info' && (
-                                                    <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                                                    </svg>
-                                                )}
-                                                {insight.type === 'warning' && (
-                                                    <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                                                    </svg>
-                                                )}
-                                                {insight.type === 'success' && (
-                                                    <svg className="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                    </svg>
-                                                )}
-                                </div>
-                                            <div className="flex-1">
-                                                <h4 className="text-sm font-medium text-gray-900 mb-1">{insight.title}</h4>
-                                                <p className="text-sm text-gray-700 mb-2">{insight.message}</p>
-                                                {insight.action && (
-                                                    <button className={`px-3 py-1 text-xs rounded-lg transition-colors ${
-                                                        insight.type === 'info' ? 'bg-blue-600 text-white hover:bg-blue-700' :
-                                                        insight.type === 'warning' ? 'bg-amber-600 text-white hover:bg-amber-700' :
-                                                        insight.type === 'success' ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-gray-600 text-white hover:bg-gray-700'
-                                                    }`}>
-                                                        {insight.action}
-                            </button>
-                                                )}
-                                            </div>
-                                </div>
-                                </div>
-                                ))
-                            )}
-                        </div>
-                    </div>
+                    <TaxAssistant />
                 </div>
             </main>
+            
+            {/* Extracted Data Confirmation Modal */}
+            <ExtractedDataConfirmation />
         </div>
     )
 }
