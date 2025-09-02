@@ -1,0 +1,50 @@
+import { Navigate } from 'react-router'
+import { useUser } from '@clerk/clerk-react'
+import { useAppStore } from '../store/useAppStore.js'
+import { useEffect } from 'react'
+
+export default function ProtectedRoute({ children, requireOnboarding = true }) {
+  const { isLoaded, isSignedIn } = useUser()
+  const { userProfile, isNewUser, markAsReturningUser } = useAppStore()
+
+  // Check if user has existing profile data on mount
+  useEffect(() => {
+    if (isLoaded && isSignedIn && userProfile?.onboardingCompleted) {
+      markAsReturningUser()
+    }
+  }, [isLoaded, isSignedIn, userProfile, markAsReturningUser])
+
+  // Show loading while Clerk is loading
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Redirect to sign-in if not authenticated
+  if (!isSignedIn) {
+    return <Navigate to="/signin" replace />
+  }
+
+  // For routes that don't require onboarding (like /onboarding itself)
+  if (!requireOnboarding) {
+    // If onboarding is already completed, redirect to home
+    if (userProfile?.onboardingCompleted) {
+      return <Navigate to="/home" replace />
+    }
+    return children
+  }
+
+  // For routes that require onboarding
+  // New users or users without completed onboarding should go to onboarding
+  if (isNewUser || !userProfile?.onboardingCompleted) {
+    return <Navigate to="/onboarding" replace />
+  }
+
+  return children
+}
