@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 import { v4 as uuidv4 } from 'uuid'
 import { format } from 'date-fns'
 import { TransactionTypes, TaxRegimes, DeductionLimits, TaxSlabs } from '../types/index.js'
+import { getChatbotResponse } from '../services/aiService.js'
 
 // Tax calculation utility functions
 const calculateTaxLiability = (taxableIncome, regime) => {
@@ -99,11 +100,19 @@ export const useAppStore = create(
       
       // AI Insights State
       aiInsights: [],
+      isAssistantLoading: false,
+      chatHistory: [
+        {
+            role: 'model',
+            parts: [{ text: 'Hello! I am your personal tax assistant. How can I help you today?' }],
+        }
+      ],
       
       // UI State
       loading: false,
       error: null,
       notifications: [],
+      useDebugDataContext: false, // <-- New debug flag
       
       // Actions
       
@@ -118,7 +127,7 @@ export const useAppStore = create(
       
       updateUserProfile: (updates) => {
         set((state) => ({
-          userProfile: { ...state.userProfile, ...updates },
+          userProfile: { ...(state.userProfile || {}), ...updates },
           isNewUser: false // User has completed setup
         }))
       },
@@ -184,18 +193,48 @@ export const useAppStore = create(
       
       // Tax Calculation Actions
       calculateTax: () => set((state) => {
-        const { transactions } = state
+        const { transactions, taxSettings } = state
         
-        const totalIncome = transactions
-          .filter(t => t.type === TransactionTypes.INCOME)
-          .reduce((sum, t) => sum + t.amount, 0)
+        const incomeTransactions = transactions.filter(t => t.type === TransactionTypes.INCOME)
+        const deductionTransactions = transactions.filter(t => t.type === TransactionTypes.DEDUCTION)
         
-        const totalDeductions = transactions
-          .filter(t => t.type === TransactionTypes.DEDUCTION)
-          .reduce((sum, t) => sum + t.amount, 0)
+        let totalIncome = incomeTransactions.reduce((sum, t) => sum + t.amount, 0)
+        let totalDeductions = deductionTransactions.reduce((sum, t) => sum + t.amount, 0)
+        
+        if (taxSettings.includeProjections) {
+            const monthlyData = {}
+            transactions.forEach(t => {
+                const month = format(new Date(t.date), 'yyyy-MM')
+                if (!monthlyData[month]) {
+                    monthlyData[month] = { income: 0, deductions: 0 }
+                }
+                if (t.type === TransactionTypes.INCOME) monthlyData[month].income += t.amount
+                if (t.type === TransactionTypes.DEDUCTION) monthlyData[month].deductions += t.amount
+            })
+
+            const months = Object.keys(monthlyData)
+            if (months.length > 0) {
+                const totalIncomeSoFar = Object.values(monthlyData).reduce((sum, m) => sum + m.income, 0)
+                const totalDeductionsSoFar = Object.values(monthlyData).reduce((sum, m) => sum + m.deductions, 0)
+                
+                const avgMonthlyIncome = totalIncomeSoFar / months.length
+                const avgMonthlyDeductions = totalDeductionsSoFar / months.length
+
+                totalIncome = avgMonthlyIncome * 12
+                totalDeductions = avgMonthlyDeductions * 12
+            }
+        }
+        
+        const professionalTax = transactions
+            .filter(t => t.category === 'Professional Tax')
+            .reduce((sum, t) => sum + t.amount, 0)
+        
+        const projectedProfessionalTax = taxSettings.includeProjections && transactions.some(t => t.source === 'ai_extracted')
+            ? professionalTax * 12
+            : professionalTax
         
         // Old Regime Calculation
-        const oldRegimeTaxableIncome = Math.max(0, totalIncome - totalDeductions - DeductionLimits.STANDARD_DEDUCTION)
+        const oldRegimeTaxableIncome = Math.max(0, totalIncome - totalDeductions - Math.min(projectedProfessionalTax, 2500) - DeductionLimits.STANDARD_DEDUCTION)
         const oldRegimeTax = calculateTaxLiability(oldRegimeTaxableIncome, TaxRegimes.OLD)
         
         // New Regime Calculation (no deductions except standard)
@@ -204,7 +243,7 @@ export const useAppStore = create(
         
         const oldRegimeData = {
           grossIncome: totalIncome,
-          totalDeductions: totalDeductions + DeductionLimits.STANDARD_DEDUCTION,
+          totalDeductions: totalDeductions + DeductionLimits.STANDARD_DEDUCTION + Math.min(projectedProfessionalTax, 2500),
           taxableIncome: oldRegimeTaxableIncome,
           taxLiability: oldRegimeTax,
           effectiveRate: totalIncome > 0 ? (oldRegimeTax / totalIncome) * 100 : 0
@@ -264,14 +303,20 @@ export const useAppStore = create(
       })),
       
       // AI Insights Actions
-      addAIInsight: (insight) => set((state) => ({
-        aiInsights: [...state.aiInsights, {
-          id: uuidv4(),
-          ...insight,
-          createdAt: new Date().toISOString(),
-          isRead: false
-        }]
-      })),
+      addAIInsight: (insight) => set((state) => {
+        // Prevent duplicate insights
+        if (state.aiInsights.some(i => i.title === insight.title)) {
+            return {};
+        }
+        return {
+            aiInsights: [...state.aiInsights, {
+              id: uuidv4(),
+              ...insight,
+              createdAt: new Date().toISOString(),
+              isRead: false
+            }]
+        }
+      }),
       
       markInsightAsRead: (insightId) => set((state) => ({
         aiInsights: state.aiInsights.map(insight => 
@@ -329,6 +374,60 @@ export const useAppStore = create(
         insights.forEach(insight => get().addAIInsight(insight))
       },
       
+      askTaxAssistant: async (userInput) => {
+        const state = get();
+        
+        const newMessage = {
+            role: 'user',
+            parts: [{ text: userInput }],
+        };
+
+        set({ 
+            chatHistory: [...state.chatHistory, newMessage],
+            isAssistantLoading: true 
+        });
+
+        let financialContext;
+
+        if (state.useDebugDataContext) {
+            console.warn("⚠️ Using DEBUG data from gemini-responses localStorage");
+            const geminiResponses = JSON.parse(localStorage.getItem('gemini-responses') || '[]');
+            if (geminiResponses.length > 0) {
+                const latestResponse = geminiResponses[geminiResponses.length - 1];
+                financialContext = {
+                    userProfile: { "source": "Debug data from gemini-responses" },
+                    transactions: latestResponse.processedResult.extractedData.transactions,
+                    taxCalculations: { "source": "Debug data - Not calculated" },
+                    deductionUtilization: { "source": "Debug data - Not calculated" },
+                };
+            } else {
+                financialContext = { error: "No debug data found in gemini-responses" };
+            }
+        } else {
+            console.info("🔵 Using LIVE data from application state");
+            financialContext = {
+                userProfile: state.userProfile,
+                transactions: state.transactions,
+                taxCalculations: state.taxCalculations,
+                deductionUtilization: state.deductionUtilization,
+            };
+        }
+
+        const response = await getChatbotResponse(financialContext, [...state.chatHistory, newMessage]);
+
+        const assistantMessage = {
+            role: 'model',
+            parts: [{ text: response }],
+        };
+
+        set(prevState => ({
+            chatHistory: [...prevState.chatHistory, assistantMessage],
+            isAssistantLoading: false,
+        }));
+    },
+      
+      toggleDebugDataContext: () => set(state => ({ useDebugDataContext: !state.useDebugDataContext })),
+
       // Utility Actions
       setLoading: (loading) => set({ loading }),
       setError: (error) => set({ error }),
@@ -409,6 +508,46 @@ export const useAppStore = create(
         })
       },
 
+      // Temporary Data Actions (for AI extraction confirmation)
+      setTempExtractedData: (extractedData) => set({ 
+        tempExtractedData: extractedData,
+        pendingTransactions: extractedData?.transactions || []
+      }),
+
+      updatePendingTransaction: (index, updates) => set((state) => ({
+        pendingTransactions: state.pendingTransactions.map((t, i) => 
+          i === index ? { ...t, ...updates } : t
+        )
+      })),
+
+      removePendingTransaction: (index) => set((state) => ({
+        pendingTransactions: state.pendingTransactions.filter((_, i) => i !== index)
+      })),
+
+      confirmPendingTransactions: () => {
+        const state = get()
+        const { pendingTransactions } = state
+        
+        // Add all pending transactions to the main transactions array
+        pendingTransactions.forEach(transaction => {
+          get().addTransaction(transaction)
+        })
+
+        // Clear temporary data
+        set({ 
+          tempExtractedData: null, 
+          pendingTransactions: [] 
+        })
+
+        // Generate AI insights for the new data
+        get().generateAIInsights()
+      },
+
+      rejectPendingTransactions: () => set({ 
+        tempExtractedData: null, 
+        pendingTransactions: [] 
+      }),
+
 
 
       // Initialize default AI insights
@@ -428,7 +567,9 @@ export const useAppStore = create(
         isNewUser: state.isNewUser,
         transactions: state.transactions,
         taxSettings: state.taxSettings,
-        uploadedFiles: state.uploadedFiles
+        uploadedFiles: state.uploadedFiles,
+        tempExtractedData: state.tempExtractedData,
+        pendingTransactions: state.pendingTransactions
       })
     }
   )
